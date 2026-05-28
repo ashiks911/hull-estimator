@@ -125,6 +125,18 @@ export default function Home() {
     return touched.has(name) ? errors[name] : undefined;
   }
 
+  function handleLoadExample() {
+    setForm({
+      lwl: "100",
+      beam: "16",
+      draft: "6",
+      displacementVolume: "7000",
+      wettedSurfaceArea: "2200",
+      speed: "14",
+    });
+    setTouched(new Set());
+  }
+
   function handleCalculate(e: React.FormEvent) {
     e.preventDefault();
     const inputL = parseFloat(form.lwl);
@@ -206,6 +218,17 @@ export default function Home() {
           onSubmit={handleCalculate}
           className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-5"
         >
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleLoadExample}
+              className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 transition-colors"
+            >
+              Load example
+            </button>
+            <span className="text-xs text-gray-400">Example: 100 m coastal cargo vessel</span>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <InputField label="Length on Waterline" unit="m" name="lwl" value={form.lwl} onChange={handleChange} onBlur={handleBlur} error={fieldError("lwl")} />
             <InputField label="Beam" unit="m" name="beam" value={form.beam} onChange={handleChange} onBlur={handleBlur} error={fieldError("beam")} />
