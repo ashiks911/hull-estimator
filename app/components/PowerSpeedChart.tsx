@@ -14,40 +14,37 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { TooltipIcon, type TooltipContent } from "@/app/components/TooltipIcon";
+import { toDisplay, unitLabel, type UnitSystem } from "@/lib/units";
 
 export type ChartPoint = {
   speedKnots: number;
-  P_B: number; // kW
-  R_T: number; // kN
+  P_B: number; // kW (SI)
+  R_T: number; // kN (SI)
   Fn: number;
 };
 
 // These must stay in sync with the LineChart's margin and YAxis width props below.
-const PLOT_LEFT = 10 + 68;        // margin.left + left Y-axis width
+const PLOT_LEFT = 10 + 68;         // margin.left + left Y-axis width
 const PLOT_RIGHT_OFFSET = 68 + 68; // margin.right + right Y-axis width
 
 // ─── Custom tooltip ─────────────────────────────────────────────────────────────
 
-function CustomTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
+function makeTooltipContent(units: UnitSystem) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  payload?: any[];
-  label?: number;
-}) {
-  if (!active || !payload?.length) return null;
-  const pt = payload[0].payload as ChartPoint;
-  return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-md px-3 py-2 text-xs space-y-0.5">
-      <p className="font-semibold text-gray-700 mb-1">{label} kn</p>
-      <p className="text-blue-600">P_B: {pt.P_B.toFixed(1)} kW</p>
-      <p className="text-emerald-600">R_T: {pt.R_T.toFixed(2)} kN</p>
-      <p className="text-gray-500">Fn: {pt.Fn.toFixed(3)}</p>
-    </div>
-  );
+  return function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: any; label?: any }) {
+    if (!active || !payload?.length) return null;
+    const pt = payload[0].payload as { speedKnots: number; P_B: number; R_T: number; Fn: number };
+    const pUnit = unitLabel("power", units);
+    const rUnit = unitLabel("resistance", units);
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg shadow-md px-3 py-2 text-xs space-y-0.5">
+        <p className="font-semibold text-gray-700 mb-1">{label} kn</p>
+        <p className="text-blue-600">P_B: {pt.P_B.toFixed(1)} {pUnit}</p>
+        <p className="text-emerald-600">R_T: {pt.R_T.toFixed(2)} {rUnit}</p>
+        <p className="text-gray-500">Fn: {pt.Fn.toFixed(3)}</p>
+      </div>
+    );
+  };
 }
 
 // ─── Annotation row ─────────────────────────────────────────────────────────────
@@ -127,10 +124,12 @@ export function PowerSpeedChart({
   data,
   userSpeedKnots,
   hullSpeedKnots,
+  units,
 }: {
   data: ChartPoint[];
   userSpeedKnots: number;
   hullSpeedKnots: number;
+  units: UnitSystem;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -146,6 +145,17 @@ export function PowerSpeedChart({
   }, []);
 
   if (data.length === 0) return null;
+
+  // Convert SI chart points to display units for rendering.
+  const displayData = data.map((pt) => ({
+    speedKnots: pt.speedKnots,
+    P_B: toDisplay(pt.P_B, "power", units),
+    R_T: toDisplay(pt.R_T, "resistance", units),
+    Fn: pt.Fn,
+  }));
+
+  const pUnit = unitLabel("power", units);
+  const rUnit = unitLabel("resistance", units);
 
   const maxX = data[data.length - 1].speedKnots;
   const hullInRange = hullSpeedKnots <= maxX;
@@ -173,7 +183,7 @@ export function PowerSpeedChart({
       {/* Chart — containerRef lets us measure width for the annotation row */}
       <div ref={containerRef}>
         <ResponsiveContainer width="100%" height={360}>
-          <LineChart data={data} margin={{ top: 12, right: 68, left: 10, bottom: 36 }}>
+          <LineChart data={displayData} margin={{ top: 12, right: 68, left: 10, bottom: 36 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" vertical={false} />
 
             <XAxis
@@ -196,7 +206,7 @@ export function PowerSpeedChart({
               tick={{ fontSize: 11, fill: "#6B7280" }}
               width={68}
               label={{
-                value: "Brake Power (kW)",
+                value: `Brake Power (${pUnit})`,
                 angle: -90,
                 position: "insideLeft",
                 offset: 18,
@@ -211,7 +221,7 @@ export function PowerSpeedChart({
               tick={{ fontSize: 11, fill: "#6B7280" }}
               width={68}
               label={{
-                value: "Resistance (kN)",
+                value: `Resistance (${rUnit})`,
                 angle: 90,
                 position: "insideRight",
                 offset: 18,
@@ -220,7 +230,7 @@ export function PowerSpeedChart({
               }}
             />
 
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={makeTooltipContent(units)} />
             <Legend verticalAlign="top" height={32} wrapperStyle={{ fontSize: 12 }} />
 
             {hullInRange && (
@@ -255,7 +265,7 @@ export function PowerSpeedChart({
               yAxisId="left"
               type="monotone"
               dataKey="P_B"
-              name="Brake Power (kW)"
+              name={`Brake Power (${pUnit})`}
               stroke="#3B82F6"
               strokeWidth={2.5}
               dot={false}
@@ -266,7 +276,7 @@ export function PowerSpeedChart({
               yAxisId="right"
               type="monotone"
               dataKey="R_T"
-              name="Total Resistance (kN)"
+              name={`Total Resistance (${rUnit})`}
               stroke="#10B981"
               strokeWidth={2}
               strokeDasharray="6 3"

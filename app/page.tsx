@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { calculateResistance, type ResistanceResults } from "@/lib/resistance";
 import { PowerSpeedChart, type ChartPoint } from "@/app/components/PowerSpeedChart";
 import { TooltipIcon, type TooltipContent } from "@/app/components/TooltipIcon";
+import {
+  toDisplay,
+  fromInput,
+  unitLabel,
+  type UnitSystem,
+  type Quantity,
+} from "@/lib/units";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -17,6 +24,16 @@ type FormState = {
 };
 
 type FieldName = keyof FormState;
+
+// Maps each form field to its unit Quantity for conversion.
+const FIELD_QUANTITY: Record<FieldName, Quantity> = {
+  lwl:                "length",
+  beam:               "length",
+  draft:              "length",
+  displacementVolume: "volume",
+  wettedSurfaceArea:  "area",
+  speed:              "speed",
+};
 
 // ─── Static tooltip content ────────────────────────────────────────────────────
 
@@ -108,7 +125,7 @@ const initialResults: ResistanceResults = {
   R_F: 0, R_R: 0, R_T: 0, P_E: 0, P_B: 0,
 };
 
-// ─── Validation ────────────────────────────────────────────────────────────────
+// ─── Validation (operates on SI form state) ────────────────────────────────────
 
 function validateForm(form: FormState): Partial<Record<FieldName, string>> {
   const errors: Partial<Record<FieldName, string>> = {};
@@ -130,16 +147,49 @@ function validateForm(form: FormState): Partial<Record<FieldName, string>> {
   return errors;
 }
 
+// ─── Unit-conversion helpers ────────────────────────────────────────────────────
+
+// Format a display value for an input field — decimal places chosen by magnitude.
+function formatForInput(val: number): string {
+  if (!isFinite(val)) return "";
+  const dp = Math.abs(val) >= 100 ? 1 : Math.abs(val) >= 1 ? 2 : 3;
+  return parseFloat(val.toFixed(dp)).toString();
+}
+
+// Regenerate display strings from a SI FormState.
+function siFormToDisplay(siForm: FormState, units: UnitSystem): FormState {
+  const result = { ...siForm };
+  (Object.keys(siForm) as FieldName[]).forEach((field) => {
+    const si = parseFloat(siForm[field]);
+    if (siForm[field] !== "" && !isNaN(si)) {
+      result[field] = formatForInput(toDisplay(si, FIELD_QUANTITY[field], units));
+    }
+  });
+  return result;
+}
+
 // ─── Page component ────────────────────────────────────────────────────────────
 
 export default function Home() {
+  // form holds SI values (used for all calculations and validation).
   const [form, setForm] = useState<FormState>(initialForm);
+  // displayForm holds what the inputs show (in the active unit system).
+  const [displayForm, setDisplayForm] = useState<FormState>(initialForm);
+  const [units, setUnits] = useState<UnitSystem>("metric");
   const [touched, setTouched] = useState<Set<FieldName>>(new Set());
   const [results, setResults] = useState<ResistanceResults>(initialResults);
   const [calculated, setCalculated] = useState(false);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [hullSpeedKnots, setHullSpeedKnots] = useState(0);
   const [selectedPresetIndex, setSelectedPresetIndex] = useState<number | null>(null);
+
+  // Restore persisted unit preference on mount.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("hullEstimator.units");
+      if (saved === "metric" || saved === "imperial") setUnits(saved);
+    } catch {}
+  }, []);
 
   const errors = validateForm(form);
   const isValid = Object.keys(errors).length === 0;
@@ -154,7 +204,18 @@ export default function Home() {
       : null;
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    const name = e.target.name as FieldName;
+    const raw = e.target.value;
+    // Always update the display buffer with the raw typed string.
+    setDisplayForm((prev) => ({ ...prev, [name]: raw }));
+    // Parse and convert to SI for the stable form state.
+    const num = parseFloat(raw);
+    if (raw === "" || isNaN(num)) {
+      setForm((prev) => ({ ...prev, [name]: raw }));
+    } else {
+      const si = fromInput(num, FIELD_QUANTITY[name], units);
+      setForm((prev) => ({ ...prev, [name]: String(si) }));
+    }
   }
 
   function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
@@ -169,13 +230,23 @@ export default function Home() {
     const idx = e.target.value === "" ? null : parseInt(e.target.value, 10);
     setSelectedPresetIndex(idx);
     if (idx !== null) {
-      setForm(PRESETS[idx].values);
+      const preset = PRESETS[idx].values; // SI
+      setForm(preset);
+      setDisplayForm(siFormToDisplay(preset, units));
       setTouched(new Set());
     }
   }
 
+  function handleUnitsChange(newUnits: UnitSystem) {
+    setUnits(newUnits);
+    try { localStorage.setItem("hullEstimator.units", newUnits); } catch {}
+    // Regenerate display strings from stable SI form — no round-trip drift.
+    setDisplayForm(siFormToDisplay(form, newUnits));
+  }
+
   function handleCalculate(e: React.FormEvent) {
     e.preventDefault();
+    // form is already in SI; pass directly to calculateResistance.
     const inputL = parseFloat(form.lwl);
     const inputB = parseFloat(form.beam);
     const inputT = parseFloat(form.draft);
@@ -200,6 +271,7 @@ export default function Home() {
         L: inputL, B: inputB, T: inputT,
         volume: inputVolume, S: inputS, speedKnots: speed,
       });
+      // Store SI values in ChartPoint; chart converts for display.
       points.push({ speedKnots: speed, P_B: r.P_B, R_T: r.R_T, Fn: r.Fn });
     }
     setChartData(points);
@@ -214,9 +286,7 @@ export default function Home() {
   const fnTooltip: TooltipContent = {
     definition: "Dimensionless speed comparing inertia to gravity. Critical for wave-making.",
     formula: "Fn = V / √(g × L). Hull speed corresponds to Fn ≈ 0.4.",
-    interpretation: calculated
-      ? fnInterpretation(results.Fn)
-      : undefined,
+    interpretation: calculated ? fnInterpretation(results.Fn) : undefined,
   };
 
   const reTooltip: TooltipContent = {
@@ -241,13 +311,16 @@ export default function Home() {
     <main className="min-h-screen py-12 px-4">
       <div className="max-w-2xl mx-auto">
         {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Hull Resistance Estimator
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Enter hull parameters to estimate resistance and power requirements.
-          </p>
+        <div className="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Hull Resistance Estimator
+            </h1>
+            <p className="mt-1 text-sm text-gray-500">
+              Enter hull parameters to estimate resistance and power requirements.
+            </p>
+          </div>
+          <UnitToggle units={units} onChange={handleUnitsChange} />
         </div>
 
         {/* Input form */}
@@ -276,12 +349,61 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <InputField label="Length on Waterline" unit="m" name="lwl" value={form.lwl} onChange={handleChange} onBlur={handleBlur} error={fieldError("lwl")} />
-            <InputField label="Beam" unit="m" name="beam" value={form.beam} onChange={handleChange} onBlur={handleBlur} error={fieldError("beam")} />
-            <InputField label="Draft" unit="m" name="draft" value={form.draft} onChange={handleChange} onBlur={handleBlur} error={fieldError("draft")} />
-            <InputField label="Displacement Volume" unit="m³" name="displacementVolume" value={form.displacementVolume} onChange={handleChange} onBlur={handleBlur} error={fieldError("displacementVolume")} warning={!errors.displacementVolume ? volumeWarning ?? undefined : undefined} />
-            <InputField label="Wetted Surface Area" unit="m²" name="wettedSurfaceArea" value={form.wettedSurfaceArea} onChange={handleChange} onBlur={handleBlur} error={fieldError("wettedSurfaceArea")} />
-            <InputField label="Speed" unit="knots" name="speed" value={form.speed} onChange={handleChange} onBlur={handleBlur} error={fieldError("speed")} />
+            <InputField
+              label="Length on Waterline"
+              unit={unitLabel("length", units)}
+              name="lwl"
+              value={displayForm.lwl}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("lwl")}
+            />
+            <InputField
+              label="Beam"
+              unit={unitLabel("length", units)}
+              name="beam"
+              value={displayForm.beam}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("beam")}
+            />
+            <InputField
+              label="Draft"
+              unit={unitLabel("length", units)}
+              name="draft"
+              value={displayForm.draft}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("draft")}
+            />
+            <InputField
+              label="Displacement Volume"
+              unit={unitLabel("volume", units)}
+              name="displacementVolume"
+              value={displayForm.displacementVolume}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("displacementVolume")}
+              warning={!errors.displacementVolume ? volumeWarning ?? undefined : undefined}
+            />
+            <InputField
+              label="Wetted Surface Area"
+              unit={unitLabel("area", units)}
+              name="wettedSurfaceArea"
+              value={displayForm.wettedSurfaceArea}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("wettedSurfaceArea")}
+            />
+            <InputField
+              label="Speed"
+              unit="knots"
+              name="speed"
+              value={displayForm.speed}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              error={fieldError("speed")}
+            />
           </div>
 
           <button
@@ -303,11 +425,38 @@ export default function Home() {
             <div className="mt-6 bg-white rounded-xl border border-gray-200 shadow-sm p-6">
               <h2 className="text-base font-semibold mb-4">Results</h2>
               <div className="divide-y divide-gray-100">
-                <ResultRow label="Frictional Resistance" value={results.R_F} unit="kN" tooltip={TOOLTIPS.R_F} />
-                <ResultRow label="Residuary Resistance" value={results.R_R} unit="kN" tooltip={TOOLTIPS.R_R} />
-                <ResultRow label="Total Resistance" value={results.R_T} unit="kN" highlight tooltip={TOOLTIPS.R_T} />
-                <ResultRow label="Effective Power" value={results.P_E} unit="kW" tooltip={TOOLTIPS.P_E} />
-                <ResultRow label="Brake Power" value={results.P_B} unit="kW" highlight tooltip={TOOLTIPS.P_B} />
+                <ResultRow
+                  label="Frictional Resistance"
+                  value={toDisplay(results.R_F, "resistance", units)}
+                  unit={unitLabel("resistance", units)}
+                  tooltip={TOOLTIPS.R_F}
+                />
+                <ResultRow
+                  label="Residuary Resistance"
+                  value={toDisplay(results.R_R, "resistance", units)}
+                  unit={unitLabel("resistance", units)}
+                  tooltip={TOOLTIPS.R_R}
+                />
+                <ResultRow
+                  label="Total Resistance"
+                  value={toDisplay(results.R_T, "resistance", units)}
+                  unit={unitLabel("resistance", units)}
+                  highlight
+                  tooltip={TOOLTIPS.R_T}
+                />
+                <ResultRow
+                  label="Effective Power"
+                  value={toDisplay(results.P_E, "power", units)}
+                  unit={unitLabel("power", units)}
+                  tooltip={TOOLTIPS.P_E}
+                />
+                <ResultRow
+                  label="Brake Power"
+                  value={toDisplay(results.P_B, "power", units)}
+                  unit={unitLabel("power", units)}
+                  highlight
+                  tooltip={TOOLTIPS.P_B}
+                />
               </div>
             </div>
 
@@ -316,7 +465,8 @@ export default function Home() {
                 results.P_B,
                 results.Fn,
                 form.speed,
-                vol / (L * B * T)
+                vol / (L * B * T),
+                units,
               )}
             />
 
@@ -324,6 +474,7 @@ export default function Home() {
               data={chartData}
               userSpeedKnots={parseFloat(form.speed)}
               hullSpeedKnots={hullSpeedKnots}
+              units={units}
             />
 
             <div className="mt-4 bg-gray-50 rounded-xl border border-gray-200 p-5">
@@ -404,21 +555,24 @@ function vesselComparison(pb: number): string {
   return "large container ship or cruise liner";
 }
 
-function formatPower(pb: number): string {
-  const hp = pb * 1.341;
+// pb is always in kW (SI). Format leads with the primary unit for the chosen system.
+function formatPower(pb: number, units: UnitSystem): string {
+  const hp = pb * 1.34102;
+  if (units === "imperial") {
+    if (hp < 1)    return `less than 1 hp (${Math.round(pb * 1000)} W)`;
+    if (hp < 10)   return `${hp.toFixed(1)} hp (${pb.toFixed(1)} kW)`;
+    if (hp < 100)  return `${Math.round(hp)} hp (${Math.round(pb)} kW)`;
+    if (hp < 1000) return `${Math.round(hp / 5) * 5} hp (${Math.round(pb / 5) * 5} kW)`;
+    return `${Math.round(hp / 10) * 10} hp (${Math.round(pb / 10) * 10} kW)`;
+  }
+  // Metric — kW leads, hp in parentheses.
   if (pb < 1) {
     const watts = Math.round((pb * 1000) / 5) * 5;
     return `less than 1 kW (${watts} W)`;
   }
-  if (pb < 10) {
-    return `${pb.toFixed(1)} kW (${Math.round(hp)} hp)`;
-  }
-  if (pb < 100) {
-    return `${Math.round(pb)} kW (${Math.round(hp)} hp)`;
-  }
-  if (pb < 1000) {
-    return `${Math.round(pb / 5) * 5} kW (${Math.round(hp / 5) * 5} hp)`;
-  }
+  if (pb < 10)   return `${pb.toFixed(1)} kW (${Math.round(hp)} hp)`;
+  if (pb < 100)  return `${Math.round(pb)} kW (${Math.round(hp)} hp)`;
+  if (pb < 1000) return `${Math.round(pb / 5) * 5} kW (${Math.round(hp / 5) * 5} hp)`;
   return `${Math.round(pb / 10) * 10} kW (${Math.round(hp / 10) * 10} hp)`;
 }
 
@@ -426,10 +580,11 @@ function buildSummary(
   pb: number,
   fn: number,
   speedKnots: string,
-  blockCoeff: number
+  blockCoeff: number,
+  units: UnitSystem,
 ): { main: string; note: string | null } {
   const main =
-    `This vessel needs roughly ${formatPower(pb)} of engine power to maintain ` +
+    `This vessel needs roughly ${formatPower(pb, units)} of engine power to maintain ` +
     `${speedKnots} knots — comparable to a ${vesselComparison(pb)}.`;
 
   let note: string | null = null;
@@ -453,6 +608,35 @@ function buildSummary(
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
+
+function UnitToggle({ units, onChange }: { units: UnitSystem; onChange: (u: UnitSystem) => void }) {
+  return (
+    <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => onChange("metric")}
+        className={`px-3 py-1.5 transition-colors ${
+          units === "metric"
+            ? "bg-blue-600 text-white"
+            : "bg-white text-gray-500 hover:bg-gray-50"
+        }`}
+      >
+        Metric
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("imperial")}
+        className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${
+          units === "imperial"
+            ? "bg-blue-600 text-white"
+            : "bg-white text-gray-500 hover:bg-gray-50"
+        }`}
+      >
+        Imperial
+      </button>
+    </div>
+  );
+}
 
 function SummaryCallout({ main, note }: { main: string; note: string | null }) {
   return (
