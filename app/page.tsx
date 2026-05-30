@@ -64,6 +64,45 @@ const initialForm: FormState = {
   speed: "",
 };
 
+type Preset = {
+  label: string;
+  caption: string;
+  values: FormState;
+};
+
+const PRESETS: Preset[] = [
+  {
+    label: "Small sailboat",
+    caption: "Small sailboat — light displacement, leisurely pace",
+    values: { lwl: "10", beam: "3.2", draft: "1.5", displacementVolume: "18", wettedSurfaceArea: "38", speed: "6" },
+  },
+  {
+    label: "Coastal trawler",
+    caption: "Coastal trawler — working hull, steady moderate speed",
+    values: { lwl: "22", beam: "6.5", draft: "2.8", displacementVolume: "280", wettedSurfaceArea: "240", speed: "10" },
+  },
+  {
+    label: "Harbor tugboat",
+    caption: "Harbor tugboat — full-form hull built for towing power",
+    values: { lwl: "28", beam: "9", draft: "3.8", displacementVolume: "560", wettedSurfaceArea: "380", speed: "11" },
+  },
+  {
+    label: "Coastal cargo ship",
+    caption: "Coastal cargo ship — full-form hull, economical moderate speed",
+    values: { lwl: "100", beam: "16", draft: "6", displacementVolume: "7000", wettedSurfaceArea: "2200", speed: "14" },
+  },
+  {
+    label: "Container ship",
+    caption: "Container ship — moderate hull, fast",
+    values: { lwl: "200", beam: "30", draft: "11", displacementVolume: "39600", wettedSurfaceArea: "7800", speed: "22" },
+  },
+  {
+    label: "Bulk carrier",
+    caption: "Bulk carrier — very full hull, slow and efficient",
+    values: { lwl: "230", beam: "32", draft: "13", displacementVolume: "81400", wettedSurfaceArea: "10500", speed: "14" },
+  },
+];
+
 const initialResults: ResistanceResults = {
   Fn: 0, Re: 0, C_F: 0, C_R: 0,
   R_F: 0, R_R: 0, R_T: 0, P_E: 0, P_B: 0,
@@ -100,6 +139,7 @@ export default function Home() {
   const [calculated, setCalculated] = useState(false);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [hullSpeedKnots, setHullSpeedKnots] = useState(0);
+  const [selectedPresetIndex, setSelectedPresetIndex] = useState<number | null>(null);
 
   const errors = validateForm(form);
   const isValid = Object.keys(errors).length === 0;
@@ -125,16 +165,13 @@ export default function Home() {
     return touched.has(name) ? errors[name] : undefined;
   }
 
-  function handleLoadExample() {
-    setForm({
-      lwl: "100",
-      beam: "16",
-      draft: "6",
-      displacementVolume: "7000",
-      wettedSurfaceArea: "2200",
-      speed: "14",
-    });
-    setTouched(new Set());
+  function handlePresetChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const idx = e.target.value === "" ? null : parseInt(e.target.value, 10);
+    setSelectedPresetIndex(idx);
+    if (idx !== null) {
+      setForm(PRESETS[idx].values);
+      setTouched(new Set());
+    }
   }
 
   function handleCalculate(e: React.FormEvent) {
@@ -218,15 +255,24 @@ export default function Home() {
           onSubmit={handleCalculate}
           className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-5"
         >
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleLoadExample}
-              className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 transition-colors"
+          <div className="flex flex-col gap-1">
+            <label htmlFor="vessel-preset" className="text-sm font-medium text-gray-700">
+              Vessel presets
+            </label>
+            <select
+              id="vessel-preset"
+              value={selectedPresetIndex ?? ""}
+              onChange={handlePresetChange}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
-              Load example
-            </button>
-            <span className="text-xs text-gray-400">Example: 100 m coastal cargo vessel</span>
+              <option value="">Select a vessel type…</option>
+              {PRESETS.map((preset, i) => (
+                <option key={preset.label} value={i}>{preset.label}</option>
+              ))}
+            </select>
+            {selectedPresetIndex !== null && (
+              <p className="text-xs text-gray-400">{PRESETS[selectedPresetIndex].caption}</p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
